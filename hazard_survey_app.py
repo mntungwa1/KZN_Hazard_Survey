@@ -12,10 +12,10 @@ from docx import Document
 from fpdf import FPDF
 import io
 
-# --- Email Configuration ---
-EMAIL_ADDRESS = "dingaanm@gmail.com"  # <-- TYPE YOUR EMAIL
-EMAIL_PASSWORD = "yrzulpaosozyrroua"    # <-- TYPE YOUR APP PASSWORD
-ADMIN_EMAIL = EMAIL_ADDRESS
+# --- Load Email Credentials from Streamlit Secrets ---
+EMAIL_ADDRESS = st.secrets["EMAIL_ADDRESS"]
+EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", EMAIL_ADDRESS)
 APP_PASSWORD = "kzn!23@"
 ADMIN_PASSWORD = "kzn!23&"
 ADMIN_EMAILS = [ADMIN_EMAIL, "mhugo@srk.co.za"]
@@ -24,13 +24,13 @@ ADMIN_EMAILS = [ADMIN_EMAIL, "mhugo@srk.co.za"]
 if EMAIL_ADDRESS and EMAIL_PASSWORD:
     st.write(f"Email loaded: {EMAIL_ADDRESS} | Password: OK")
 else:
-    st.error("Email credentials are missing! Please edit hazard_survey_app.py")
+    st.error("Email credentials are missing in Streamlit secrets!")
 
 # --- Configuration ---
 BASE_DIR = Path("C:/temp/kzn")
 TODAY_FOLDER = datetime.now().strftime("%d_%b_%Y")
 SAVE_DIR = BASE_DIR / TODAY_FOLDER
-EXCEL_PATH = Path("RiskAssessmentTool.xlsm")  # Remove if Excel is not used
+EXCEL_PATH = Path("RiskAssessmentTool.xlsm")
 GEOJSON_PATH = Path("KZN_wards.geojson")
 MASTER_CSV = BASE_DIR / "all_submissions.csv"
 LOGO_PATH = "Logo.png"
@@ -80,7 +80,7 @@ if not st.session_state.get("authenticated", False):
 # --- Email Sending ---
 def send_email(subject, body, to_emails, attachments):
     if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
-        st.warning("Email credentials missing. Skipping email sending.")
+        st.warning("Email credentials missing in Streamlit secrets. Skipping email sending.")
         return
 
     try:
@@ -188,117 +188,7 @@ def display_map(gdf, selected_ward=None):
 
     return st_folium(m, height=500)
 
-# --- Hazard Data ---
-hazards_list = [
-    "Floods", "Fires", "Storms", "Drought", "Landslides", "Other hazards..."
-]
-
-# --- Load Data ---
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_hazards():
-    return hazards_list
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_ward_gdf():
-    return gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
-
-# --- Survey ---
-def run_survey():
-    st.title("KZN Hazard Risk Assessment Survey")
-    hazards = load_hazards()
-    gdf = load_ward_gdf()
-    selected_ward = st.session_state.get("selected_ward", None)
-    map_data = display_map(gdf, selected_ward=selected_ward)
-
-    if map_data.get("last_clicked"):
-        pt = Point(map_data["last_clicked"]["lng"], map_data["last_clicked"]["lat"])
-        for _, row in gdf.iterrows():
-            if row.geometry.contains(pt):
-                st.session_state["selected_ward"] = row[gdf.columns[0]]
-                break
-
-    ward_display = st.session_state.get("selected_ward", "")
-    if ward_display:
-        st.success(f"Selected Ward: {ward_display}")
-
-    st.subheader("Select Applicable Hazards")
-    selected = st.multiselect("Choose hazards:", hazards)
-    custom = st.text_input("Other hazard") if st.checkbox("Add custom hazard") else ""
-
-    if selected or custom:
-        if st.button("Proceed"):
-            st.session_state["show_form"] = True
-            st.rerun()
-
-    if st.session_state.get("show_form"):
-        tab1, tab2 = st.tabs(["Respondent Info", "Hazard Risk Evaluation"])
-        with tab1:
-            with st.form("respondent_form"):
-                name = st.text_input("Full Name")
-                user_email = st.text_input("Your Email")
-                district_muni = st.text_input("District Municipality")
-                local_muni = st.text_input("Local Municipality")
-                final_ward = ward_display or st.text_input("Ward (if not using map)")
-                today = st.date_input("Date", value=date.today())
-                proceed = st.form_submit_button("Save & Proceed to Hazard Evaluation")
-                if proceed:
-                    if not name or not final_ward:
-                        st.error("Please fill in your name and ward.")
-                    else:
-                        st.session_state["respondent_info"] = {
-                            "name": name,
-                            "email": user_email,
-                            "district": district_muni,
-                            "local": local_muni,
-                            "ward": final_ward,
-                            "date": today
-                        }
-                        st.rerun()
-
-        with tab2:
-            if st.button("← Back to Respondent Info"):
-                st.rerun()
-
-            with st.form("hazard_form"):
-                hazards_to_ask = selected + ([custom] if custom else [])
-                responses = build_hazard_questions(hazards_to_ask)
-                accept = st.checkbox("I accept all information is true and correct")
-                submit = st.form_submit_button("Submit Survey")
-                if submit:
-                    info = st.session_state.get("respondent_info", {})
-                    if not info:
-                        st.error("Please complete Respondent Info first.")
-                    elif not accept:
-                        st.error("You must accept that all information is true and correct.")
-                    else:
-                        csv_file, doc_file, pdf_file = save_responses(
-                            responses, info["name"], info["ward"], info["email"],
-                            info["date"], info["district"], info["local"]
-                        )
-                        st.success("Survey submitted successfully!")
-                        if info["email"]:
-                            send_email("Your KZN Hazard Survey Submission",
-                                       "Thank you for completing the survey.",
-                                       [info["email"]], [csv_file, doc_file, pdf_file])
-                        send_email("New KZN Hazard Survey Submission",
-                                   "A new survey has been submitted.",
-                                   ADMIN_EMAILS, [csv_file, doc_file, pdf_file])
-
-# --- Question Builder ---
-def build_hazard_questions(hazards_to_ask):
-    responses = []
-    for hazard in hazards_to_ask:
-        st.markdown(f"### {hazard}")
-        for q, opts in questions_with_descriptions.items():
-            response = st.radio(q, opts, key=f"{hazard}_{q}", index=0)
-            responses.append({"Hazard": hazard, "Question": q, "Response": response})
-
-        for cq in capacity_questions:
-            response = st.radio(cq, capacity_options, key=f"{hazard}_{cq}", index=0)
-            responses.append({"Hazard": hazard, "Question": cq, "Response": response})
-        st.markdown("<hr>", unsafe_allow_html=True)
-    return responses
-
+# --- Hazard Questions ---
 questions_with_descriptions = {
     "Has this hazard occurred in the past?": [
         "0 - Has not occurred and has no chance of occurrence",
@@ -389,6 +279,7 @@ capacity_questions = [
     "Prevention and mitigation plans",
     "Response and recovery plans",
 ]
+
 capacity_options = [
     "Strongly Disagree",
     "Disagree",
@@ -396,6 +287,113 @@ capacity_options = [
     "Agree",
     "Strongly Agree",
 ]
+
+# --- Hazard Question Rendering ---
+def build_hazard_questions(hazards_to_ask):
+    responses = []
+    for hazard in hazards_to_ask:
+        st.markdown(f"### {hazard}")
+        for q, opts in questions_with_descriptions.items():
+            response = st.radio(q, opts, key=f"{hazard}_{q}", index=0)
+            responses.append({"Hazard": hazard, "Question": q, "Response": response})
+
+        for cq in capacity_questions:
+            response = st.radio(cq, capacity_options, key=f"{hazard}_{cq}", index=0)
+            responses.append({"Hazard": hazard, "Question": cq, "Response": response})
+        st.markdown("<hr>", unsafe_allow_html=True)
+    return responses
+
+# --- Load Data ---
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_hazards():
+    df = pd.read_excel(EXCEL_PATH, sheet_name="Hazard information", skiprows=1)
+    return df.iloc[:, 0].dropna().tolist()
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_ward_gdf():
+    return gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
+
+# --- Survey ---
+def run_survey():
+    st.title("KZN Hazard Risk Assessment Survey")
+    hazards = load_hazards()
+    gdf = load_ward_gdf()
+    selected_ward = st.session_state.get("selected_ward", None)
+    map_data = display_map(gdf, selected_ward=selected_ward)
+
+    if map_data.get("last_clicked"):
+        pt = Point(map_data["last_clicked"]["lng"], map_data["last_clicked"]["lat"])
+        for _, row in gdf.iterrows():
+            if row.geometry.contains(pt):
+                st.session_state["selected_ward"] = row[gdf.columns[0]]
+                break
+
+    ward_display = st.session_state.get("selected_ward", "")
+    if ward_display:
+        st.success(f"Selected Ward: {ward_display}")
+
+    st.subheader("Select Applicable Hazards")
+    selected = st.multiselect("Choose hazards:", hazards)
+    custom = st.text_input("Other hazard") if st.checkbox("Add custom hazard") else ""
+
+    if selected or custom:
+        if st.button("Proceed"):
+            st.session_state["show_form"] = True
+            st.rerun()
+
+    if st.session_state.get("show_form"):
+        tab1, tab2 = st.tabs(["Respondent Info", "Hazard Risk Evaluation"])
+        with tab1:
+            with st.form("respondent_form"):
+                name = st.text_input("Full Name")
+                user_email = st.text_input("Your Email")
+                district_muni = st.text_input("District Municipality")
+                local_muni = st.text_input("Local Municipality")
+                final_ward = ward_display or st.text_input("Ward (if not using map)")
+                today = st.date_input("Date", value=date.today())
+                proceed = st.form_submit_button("Save & Proceed to Hazard Evaluation")
+                if proceed:
+                    if not name or not final_ward:
+                        st.error("Please fill in your name and ward.")
+                    else:
+                        st.session_state["respondent_info"] = {
+                            "name": name,
+                            "email": user_email,
+                            "district": district_muni,
+                            "local": local_muni,
+                            "ward": final_ward,
+                            "date": today
+                        }
+                        st.rerun()
+
+        with tab2:
+            if st.button("← Back to Respondent Info"):
+                st.rerun()
+
+            with st.form("hazard_form"):
+                hazards_to_ask = selected + ([custom] if custom else [])
+                responses = build_hazard_questions(hazards_to_ask)
+                accept = st.checkbox("I accept all information is true and correct")
+                submit = st.form_submit_button("Submit Survey")
+                if submit:
+                    info = st.session_state.get("respondent_info", {})
+                    if not info:
+                        st.error("Please complete Respondent Info first.")
+                    elif not accept:
+                        st.error("You must accept that all information is true and correct.")
+                    else:
+                        csv_file, doc_file, pdf_file = save_responses(
+                            responses, info["name"], info["ward"], info["email"],
+                            info["date"], info["district"], info["local"]
+                        )
+                        st.success("Survey submitted successfully!")
+                        if info["email"]:
+                            send_email("Your KZN Hazard Survey Submission",
+                                       "Thank you for completing the survey.",
+                                       [info["email"]], [csv_file, doc_file, pdf_file])
+                        send_email("New KZN Hazard Survey Submission",
+                                   "A new survey has been submitted.",
+                                   ADMIN_EMAILS, [csv_file, doc_file, pdf_file])
 
 # --- Main App ---
 st.set_page_config(page_title="KZN Hazard Risk Assessment", layout="wide")
