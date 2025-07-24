@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
@@ -421,3 +422,221 @@ elif menu == "Admin Dashboard":
                            file_name="filtered_submissions.csv", mime="text/csv")
     else:
         st.warning("No submissions found.")
+=======
+# -*- coding: utf-8 -*-
+import streamlit as st
+import pandas as pd
+import geopandas as gpd
+import os, shutil, zipfile, re, smtplib, sys
+from datetime import datetime, date
+from shapely.geometry import Point
+from streamlit_folium import st_folium
+from email.message import EmailMessage
+from dotenv import load_dotenv
+import folium
+from docx import Document
+from fpdf import FPDF
+from pathlib import Path
+import webbrowser
+
+# --- Load environment variables ---
+load_dotenv()
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "dummy_email@gmail.com")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "dummy_password")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "kzn!23@")
+
+# -------------------------------
+# PASSWORD PROTECTION SECTION
+# -------------------------------
+def password_protection():
+    password = st.text_input("Enter password to access the app:", type="password")
+    if password == APP_PASSWORD:
+        st.session_state["authenticated"] = True
+        st.success("Access granted.")
+    elif password:
+        st.error("Incorrect password.")
+
+if "authenticated" not in st.session_state or not st.session_state["authenticated"]:
+    st.title("🔒 KZN Hazard Risk Assessment Survey - Login")
+    password_protection()
+    st.stop()
+# -------------------------------
+
+# --- File paths ---
+BASE_DIR = Path("C:/tmp/kzn")
+TODAY_FOLDER = datetime.now().strftime("%d_%b_%Y")
+SAVE_DIR = BASE_DIR / TODAY_FOLDER
+SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
+EXCEL_PATH = Path("RiskAssessmentTool.xlsm")
+GEOJSON_PATH = Path("KZN_wards.geojson")
+LOGO_PATH = "Logo.png"
+SRK_LOGO_PATH = "SRK_Logo.png"
+
+# --- Cleanup old folders ---
+def cleanup_old_folders(base_dir, days=30):
+    now = datetime.now()
+    pattern = re.compile(r"\d{2}_[A-Za-z]{3}_\d{4}")
+    for folder in base_dir.iterdir():
+        if folder.is_dir() and pattern.fullmatch(folder.name):
+            try:
+                if (now - datetime.strptime(folder.name, "%d_%b_%Y")).days > days:
+                    shutil.rmtree(folder)
+            except:
+                continue
+cleanup_old_folders(BASE_DIR)
+
+# --- Load data ---
+@st.cache_data
+def load_hazards():
+    try:
+        df = pd.read_excel(EXCEL_PATH, sheet_name="Hazard information", skiprows=1)
+        hazards_list = df.iloc[:, 0].dropna().tolist()
+        if not hazards_list:
+            st.error("No hazards found in the 'Hazard information' sheet. Please check the Excel file.")
+            st.stop()
+        return hazards_list
+    except Exception as e:
+        st.error("Error reading hazards: {}".format(e))
+        st.stop()
+
+@st.cache_data
+def load_ward_gdf():
+    return gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
+
+hazards = load_hazards()
+gdf = load_ward_gdf()
+
+# --- Page layout ---
+st.set_page_config(page_title="KZN Hazard Risk Assessment", layout="wide")
+st.image(LOGO_PATH, width=240)
+st.image(SRK_LOGO_PATH, width=200)
+st.title("KZN Hazard Risk Assessment Survey")
+st.markdown("---")
+
+# --- Interactive Map ---
+st.subheader("Select a Ward from the Map")
+m = folium.Map(location=[-29.5, 31.1], zoom_start=7)
+folium.GeoJson(
+    data=gdf.__geo_interface__,
+    name="Wards",
+    tooltip=folium.GeoJsonTooltip(fields=gdf.columns[:1].tolist()),
+    popup=folium.GeoJsonPopup(fields=gdf.columns[:1].tolist()),
+    highlight_function=lambda x: {"fillColor": "#ffaf00", "color": "black", "weight": 2},
+).add_to(m)
+
+map_data = st_folium(m, height=500)
+
+# --- Ward selection logic ---
+clicked_ward = None
+if "last_active_drawing" in map_data and map_data["last_active_drawing"]:
+    props = map_data["last_active_drawing"].get("properties", {})
+    clicked_ward = props.get(gdf.columns[0])
+elif "last_clicked" in map_data and map_data["last_clicked"]:
+    lng = map_data["last_clicked"]["lng"]
+    lat = map_data["last_clicked"]["lat"]
+    pt = Point(lng, lat)
+    for _, row in gdf.iterrows():
+        if row.geometry.contains(pt):
+            clicked_ward = row[gdf.columns[0]]
+            break
+
+if clicked_ward:
+    st.session_state["selected_ward"] = clicked_ward
+ward_display = st.session_state.get("selected_ward", "")
+if ward_display:
+    st.success("Selected Ward: {}".format(ward_display))
+
+# --- Hazard Selection ---
+st.markdown("---")
+st.subheader("Select Applicable Hazards")
+selected = st.multiselect("Choose hazards:", hazards)
+include_other = st.checkbox("Add a custom hazard (Other)")
+custom = st.text_input("Specify other hazard:") if include_other else ""
+
+# --- Survey Form ---
+submitted = False
+if selected or custom:
+    with st.form("hazard_form"):
+        tab1, tab2 = st.tabs(["Respondent Info", "Hazard Risk Evaluation"])
+
+        with tab1:
+            name = st.text_input("Full Name")
+            final_ward = ward_display or st.text_input("Ward (if not using map)")
+            today = st.date_input("Date", value=date.today())
+            user_email = st.text_input("Your Email")
+            confirm = st.checkbox("I confirm the information is accurate")
+
+        with tab2:
+            levels = ["0 - Not applicable", "1 - Low", "2 - Moderate", "3 - High", "4 - Severe"]
+            score_map = {v: i for i, v in enumerate(levels)}
+            hazards_to_ask = selected + ([custom] if custom else [])
+            responses = []
+            all_filled = False  # Track if at least one hazard entry is filled
+            for hazard in hazards_to_ask:
+                st.markdown("**{}**".format(hazard))
+                like = st.selectbox("Likelihood:", levels, key="{}_like".format(hazard))
+                impact = st.selectbox("Impact:", levels, key="{}_impact".format(hazard))
+                disrupt = st.selectbox("Disruption:", levels, key="{}_disrupt".format(hazard))
+                if like != levels[0] or impact != levels[0] or disrupt != levels[0]:
+                    all_filled = True
+                risk_score = score_map[like] * score_map[impact] * score_map[disrupt]
+                responses.append({
+                    "Name": name,
+                    "Ward": final_ward,
+                    "Date": today,
+                    "Hazard": hazard,
+                    "Likelihood": like,
+                    "Impact": impact,
+                    "Disruption": disrupt,
+                    "Risk Score": risk_score
+                })
+
+        submitted = st.form_submit_button("Submit Survey", disabled=not all_filled)
+
+# --- File Generation & Email ---
+if submitted and name and final_ward and user_email and confirm:
+    df = pd.DataFrame(responses)
+    base = "{}_{}".format(final_ward, today)
+    paths = {
+        "csv": SAVE_DIR / "{}_responses.csv".format(base),
+        "excel": SAVE_DIR / "{}_responses.xlsx".format(base),
+        "word": SAVE_DIR / "{}_responses.docx".format(base),
+        "pdf": SAVE_DIR / "{}_responses.pdf".format(base),
+        "zip": SAVE_DIR / "{}_hazard_survey.zip".format(base)
+    }
+
+    df.to_csv(paths["csv"], index=False)
+    df.to_excel(paths["excel"], index=False)
+
+    doc = Document()
+    doc.add_heading("Hazard Risk Assessment for {}".format(final_ward), 0)
+    for _, row in df.iterrows():
+        doc.add_paragraph(
+            "Hazard: {}\nLikelihood: {}\nImpact: {}\nDisruption: {}\nRisk Score: {}".format(
+                row['Hazard'], row['Likelihood'], row['Impact'], row['Disruption'], row['Risk Score']
+            )
+        )
+    doc.save(paths["word"])
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Hazard Risk Assessment for {}".format(final_ward), ln=True)
+    for _, row in df.iterrows():
+        text = "Hazard: {}\nLikelihood: {}\nImpact: {}\nDisruption: {}\nRisk Score: {}\n".format(
+            row['Hazard'], row['Likelihood'], row['Impact'], row['Disruption'], row['Risk Score']
+        )
+        pdf.multi_cell(0, 10, txt=text)
+    pdf.output(str(paths["pdf"]))
+
+    with zipfile.ZipFile(paths["zip"], "w") as zipf:
+        for file_key in ["csv", "excel", "word", "pdf"]:
+            zipf.write(paths[file_key], arcname=paths[file_key].name)
+
+    st.success("Survey submitted successfully! Files have been saved and emailed.")
+
+# --- Disclaimer ---
+st.markdown("---")
+st.markdown("**Disclaimer:** The software is developed by Dingaan Mahlangu and should not be used without prior permission.")
+>>>>>>> 7e32975 (Added .gitignore and removed venv from tracking)

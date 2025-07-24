@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # KZN Hazard Risk Assessment Survey App
 
 This repository contains a **Streamlit web application** for conducting hazard risk assessments across wards in KwaZulu-Natal (KZN).  
@@ -23,3 +24,24 @@ git clone https://github.com/mntungwa1/KZN_Hazard_Survey.git
 cd KZN_Hazard_Survey
 "# KZN_Hazard_Survey" 
 "# KZN_Hazard_Survey" 
+=======
+# KZN Hazard Risk Assessment Survey
+
+This is a Streamlit-based web application for conducting hazard risk assessments in KZN.
+
+## How to Run Locally
+1. Install Python 3.10 or higher.
+2. Install required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Start the app:
+   ```bash
+   streamlit run hazard_survey_app.py
+   ```
+
+## Deploying on Streamlit Cloud
+1. Upload all files to a public GitHub repository.
+2. Go to [Streamlit Cloud](https://streamlit.io/cloud).
+3. Click **New App**, select your repository, and deploy.
+>>>>>>> 7e32975 (Added .gitignore and removed venv from tracking)

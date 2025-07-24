@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 altair==5.5.0
 altgraph==0.17.4
 attrs==25.3.0
@@ -68,3 +69,15 @@ python-docx
 fpdf
 python-dotenv
 shapely
+=======
+streamlit
+pandas
+geopandas
+folium
+streamlit-folium
+python-docx
+fpdf
+python-dotenv
+shapely
+branca
+>>>>>>> 7e32975 (Added .gitignore and removed venv from tracking)
