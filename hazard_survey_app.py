@@ -10,29 +10,27 @@ import os, smtplib, shutil, re
 from email.message import EmailMessage
 from docx import Document
 from fpdf import FPDF
-from dotenv import load_dotenv
 import io
 
-# --- Load Environment Variables ---
-load_dotenv(dotenv_path="C:/tmp/KZN/.env")
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", EMAIL_ADDRESS)
+# --- Email Configuration ---
+EMAIL_ADDRESS = "dingaanm@gmail.com"  # <-- TYPE YOUR EMAIL
+EMAIL_PASSWORD = "yrzulpaosozyrroua"    # <-- TYPE YOUR APP PASSWORD
+ADMIN_EMAIL = EMAIL_ADDRESS
 APP_PASSWORD = "kzn!23@"
 ADMIN_PASSWORD = "kzn!23&"
 ADMIN_EMAILS = [ADMIN_EMAIL, "mhugo@srk.co.za"]
 
-# --- DEBUG: Show if .env values are loaded ---
-if EMAIL_ADDRESS:
-    st.write(f"Email loaded: {EMAIL_ADDRESS} | Password: OK" if EMAIL_PASSWORD else "Password missing!")
+# --- Debug Info ---
+if EMAIL_ADDRESS and EMAIL_PASSWORD:
+    st.write(f"Email loaded: {EMAIL_ADDRESS} | Password: OK")
 else:
-    st.error("EMAIL_ADDRESS not found in .env file!")
+    st.error("Email credentials are missing! Please edit hazard_survey_app.py")
 
 # --- Configuration ---
 BASE_DIR = Path("C:/temp/kzn")
 TODAY_FOLDER = datetime.now().strftime("%d_%b_%Y")
 SAVE_DIR = BASE_DIR / TODAY_FOLDER
-EXCEL_PATH = Path("RiskAssessmentTool.xlsm")
+EXCEL_PATH = Path("RiskAssessmentTool.xlsm")  # Remove if Excel is not used
 GEOJSON_PATH = Path("KZN_wards.geojson")
 MASTER_CSV = BASE_DIR / "all_submissions.csv"
 LOGO_PATH = "Logo.png"
@@ -82,7 +80,7 @@ if not st.session_state.get("authenticated", False):
 # --- Email Sending ---
 def send_email(subject, body, to_emails, attachments):
     if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
-        st.warning("Email credentials missing in .env. Skipping email sending.")
+        st.warning("Email credentials missing. Skipping email sending.")
         return
 
     try:
@@ -190,124 +188,15 @@ def display_map(gdf, selected_ward=None):
 
     return st_folium(m, height=500)
 
-# --- Questions ---
-questions_with_descriptions = {
-    "Has this hazard occurred in the past?": [
-        "0 - Has not occurred and has no chance of occurrence",
-        "1 - Has not occurred but there is real potential for occurrence",
-        "2 - Has occurred but only once",
-        "3 - Has occurred but only a few times or rarely",
-        "4 - Has occurred regularly or at least once a year",
-        "5 - Occurs multiple times during a single year",
-    ],
-    "How frequently does it occur?": [
-        "0 - Unknown / Not applicable",
-        "1 - Decreasing",
-        "2 - Stable",
-        "3 - Marginally increasing",
-        "4 - Increasing",
-        "5 - Increasing rapidly",
-    ],
-    "What is the typical duration of the hazard?": [
-        "0 - Unknown / Not applicable",
-        "1 - Few minutes",
-        "2 - Few hours",
-        "3 - Few days",
-        "4 - Few weeks",
-        "5 - Few months",
-    ],
-    "What is the area of impact?": [
-        "0 - None",
-        "1 - Single property",
-        "2 - Single Ward",
-        "3 - Few wards",
-        "4 - Entire municipality",
-        "5 - Larger than municipality",
-    ],
-    "What is the impact on people?": [
-        "0 - None",
-        "1 - Low impact / Discomfort",
-        "2 - Minimal impact / Minor injuries",
-        "3 - Serious injuries / Health problems no fatalities",
-        "4 - Fatalities / Serious health problems but confined",
-        "5 - Multiple fatalities spread over wide area",
-    ],
-    "What is the impact on infrastructure and services?": [
-        "0 - None",
-        "1 - Low impact / Minor damage / Minor disruption",
-        "2 - Some structural damage / Short term disruption of services",
-        "3 - Medium structural damage / 1 Week disruption",
-        "4 - Serious structural damage / Disruption of longer than a week",
-        "5 - Total disruption of structure / Disruption of longer than a month",
-    ],
-    "What is the impact on the environment?": [
-        "0 - Not applicable / No effects",
-        "1 - Minor effects",
-        "2 - Medium effects",
-        "3 - Severe",
-        "4 - Severe effects over wide area",
-        "5 - Total destruction",
-    ],
-    "What is the level of economic disruption?": [
-        "0 - No disruption",
-        "1 - Some disruption",
-        "2 - Medium disruption",
-        "3 - Severe short-term disruption",
-        "4 - Severe long-term disruption",
-        "5 - Total stop in activities",
-    ],
-    "How predictable is the hazard?": [
-        "0 - Not applicable",
-        "1 - Effective early warning",
-        "3 - Partially predictable",
-        "5 - No early warning",
-    ],
-    "What is the urgency or priority level?": [
-        "0 - Not applicable / No effects",
-        "1 - Low priority",
-        "2 - Medium priority",
-        "3 - Medium high priority",
-        "4 - High priority",
-        "5 - Very high priority",
-    ],
-}
-capacity_questions = [
-    "Sufficient staff/human resources",
-    "Experience and special knowledge",
-    "Equipment",
-    "Funding",
-    "Facilities",
-    "Prevention and mitigation plans",
-    "Response and recovery plans",
+# --- Hazard Data ---
+hazards_list = [
+    "Floods", "Fires", "Storms", "Drought", "Landslides", "Other hazards..."
 ]
-capacity_options = [
-    "Strongly Disagree",
-    "Disagree",
-    "Neutral",
-    "Agree",
-    "Strongly Agree",
-]
-
-# --- Hazard Question Rendering ---
-def build_hazard_questions(hazards_to_ask):
-    responses = []
-    for hazard in hazards_to_ask:
-        st.markdown(f"### {hazard}")
-        for q, opts in questions_with_descriptions.items():
-            response = st.radio(q, opts, key=f"{hazard}_{q}", index=0)
-            responses.append({"Hazard": hazard, "Question": q, "Response": response})
-
-        for cq in capacity_questions:
-            response = st.radio(cq, capacity_options, key=f"{hazard}_{cq}", index=0)
-            responses.append({"Hazard": hazard, "Question": cq, "Response": response})
-        st.markdown("<hr>", unsafe_allow_html=True)
-    return responses
 
 # --- Load Data ---
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_hazards():
-    df = pd.read_excel(EXCEL_PATH, sheet_name="Hazard information", skiprows=1)
-    return df.iloc[:, 0].dropna().tolist()
+    return hazards_list
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_ward_gdf():
@@ -394,6 +283,119 @@ def run_survey():
                         send_email("New KZN Hazard Survey Submission",
                                    "A new survey has been submitted.",
                                    ADMIN_EMAILS, [csv_file, doc_file, pdf_file])
+
+# --- Question Builder ---
+def build_hazard_questions(hazards_to_ask):
+    responses = []
+    for hazard in hazards_to_ask:
+        st.markdown(f"### {hazard}")
+        for q, opts in questions_with_descriptions.items():
+            response = st.radio(q, opts, key=f"{hazard}_{q}", index=0)
+            responses.append({"Hazard": hazard, "Question": q, "Response": response})
+
+        for cq in capacity_questions:
+            response = st.radio(cq, capacity_options, key=f"{hazard}_{cq}", index=0)
+            responses.append({"Hazard": hazard, "Question": cq, "Response": response})
+        st.markdown("<hr>", unsafe_allow_html=True)
+    return responses
+
+questions_with_descriptions = {
+    "Has this hazard occurred in the past?": [
+        "0 - Has not occurred and has no chance of occurrence",
+        "1 - Has not occurred but there is real potential for occurrence",
+        "2 - Has occurred but only once",
+        "3 - Has occurred but only a few times or rarely",
+        "4 - Has occurred regularly or at least once a year",
+        "5 - Occurs multiple times during a single year",
+    ],
+    "How frequently does it occur?": [
+        "0 - Unknown / Not applicable",
+        "1 - Decreasing",
+        "2 - Stable",
+        "3 - Marginally increasing",
+        "4 - Increasing",
+        "5 - Increasing rapidly",
+    ],
+    "What is the typical duration of the hazard?": [
+        "0 - Unknown / Not applicable",
+        "1 - Few minutes",
+        "2 - Few hours",
+        "3 - Few days",
+        "4 - Few weeks",
+        "5 - Few months",
+    ],
+    "What is the area of impact?": [
+        "0 - None",
+        "1 - Single property",
+        "2 - Single Ward",
+        "3 - Few wards",
+        "4 - Entire municipality",
+        "5 - Larger than municipality",
+    ],
+    "What is the impact on people?": [
+        "0 - None",
+        "1 - Low impact / Discomfort",
+        "2 - Minimal impact / Minor injuries",
+        "3 - Serious injuries / Health problems no fatalities",
+        "4 - Fatalities / Serious health problems but confined",
+        "5 - Multiple fatalities spread over wide area",
+    ],
+    "What is the impact on infrastructure and services?": [
+        "0 - None",
+        "1 - Low impact / Minor damage / Minor disruption",
+        "2 - Some structural damage / Short term disruption of services",
+        "3 - Medium structural damage / 1 Week disruption",
+        "4 - Serious structural damage / Disruption of longer than a week",
+        "5 - Total disruption of structure / Disruption of longer than a month",
+    ],
+    "What is the impact on the environment?": [
+        "0 - Not applicable / No effects",
+        "1 - Minor effects",
+        "2 - Medium effects",
+        "3 - Severe",
+        "4 - Severe effects over wide area",
+        "5 - Total destruction",
+    ],
+    "What is the level of economic disruption?": [
+        "0 - No disruption",
+        "1 - Some disruption",
+        "2 - Medium disruption",
+        "3 - Severe short-term disruption",
+        "4 - Severe long-term disruption",
+        "5 - Total stop in activities",
+    ],
+    "How predictable is the hazard?": [
+        "0 - Not applicable",
+        "1 - Effective early warning",
+        "3 - Partially predictable",
+        "5 - No early warning",
+    ],
+    "What is the urgency or priority level?": [
+        "0 - Not applicable / No effects",
+        "1 - Low priority",
+        "2 - Medium priority",
+        "3 - Medium high priority",
+        "4 - High priority",
+        "5 - Very high priority",
+    ],
+}
+
+capacity_questions = [
+    "Sufficient staff/human resources",
+    "Experience and special knowledge",
+    "Equipment",
+    "Funding",
+    "Facilities",
+    "Prevention and mitigation plans",
+    "Response and recovery plans",
+]
+capacity_options = [
+    "Strongly Disagree",
+    "Disagree",
+    "Neutral",
+    "Agree",
+    "Strongly Agree",
+]
 
 # --- Main App ---
 st.set_page_config(page_title="KZN Hazard Risk Assessment", layout="wide")
