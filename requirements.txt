@@ -68,7 +68,6 @@ python-docx
 fpdf
 python-dotenv
 shapely
-=======
 streamlit
 pandas
 geopandas
