@@ -278,7 +278,7 @@ def display_map(gdf):
         data=gdf.__geo_interface__,
         style_function=lambda x: {"fillColor": "#3186cc", "color": "black", "weight": 1, "fillOpacity": 0.4},
         highlight_function=lambda x: {"fillColor": "#ffcc00", "color": "black", "weight": 2, "fillOpacity": 0.7},
-        tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[0]], aliases=["Ward:"], sticky=True)
+        tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[0]], aliases=["UID:"], sticky=True)
     ).add_to(m)
     return st_folium(m, height=1000, width=1200)
 
