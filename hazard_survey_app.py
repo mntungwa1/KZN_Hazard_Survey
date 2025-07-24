@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
@@ -639,4 +638,3 @@ if submitted and name and final_ward and user_email and confirm:
 # --- Disclaimer ---
 st.markdown("---")
 st.markdown("**Disclaimer:** The software is developed by Dingaan Mahlangu and should not be used without prior permission.")
->>>>>>> 7e32975 (Added .gitignore and removed venv from tracking)
