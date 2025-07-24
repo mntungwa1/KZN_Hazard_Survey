@@ -6,55 +6,35 @@ from streamlit_folium import st_folium
 import folium
 from pathlib import Path
 from datetime import datetime, date
-import os, smtplib, shutil, re
+import os, smtplib, re, zipfile
 from email.message import EmailMessage
 from docx import Document
 from fpdf import FPDF
-import io
-
-# --- Load Email Credentials from Streamlit Secrets ---
-EMAIL_ADDRESS = st.secrets["EMAIL_ADDRESS"]
-EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
-ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", EMAIL_ADDRESS)
-APP_PASSWORD = "kzn!23@"
-ADMIN_PASSWORD = "kzn!23&"
-ADMIN_EMAILS = [ADMIN_EMAIL, "mhugo@srk.co.za"]
-
-# --- Debug Info ---
-if EMAIL_ADDRESS and EMAIL_PASSWORD:
-    st.write(f"Email loaded: {EMAIL_ADDRESS} | Password: OK")
-else:
-    st.error("Email credentials are missing in Streamlit secrets!")
 
 # --- Configuration ---
-BASE_DIR = Path("C:/temp/kzn")
-TODAY_FOLDER = datetime.now().strftime("%d_%b_%Y")
-SAVE_DIR = BASE_DIR / TODAY_FOLDER
+BASE_DIR = Path("C:/Temp/kzn")
+SAVE_DIR = BASE_DIR / "Responses"
+SAVE_DIR.mkdir(parents=True, exist_ok=True)
+MASTER_CSV = BASE_DIR / "all_submissions.csv"
 EXCEL_PATH = Path("RiskAssessmentTool.xlsm")
 GEOJSON_PATH = Path("KZN_wards.geojson")
-MASTER_CSV = BASE_DIR / "all_submissions.csv"
+
+# --- Load from Streamlit Secrets ---
+EMAIL_ADDRESS = st.secrets["EMAIL_ADDRESS"]
+EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", "kzn!23@")
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "kzn!23&")
+ADMIN_EMAILS = [st.secrets.get("ADMIN_EMAIL", EMAIL_ADDRESS), "dingaanm@gmail.com"]
+
 LOGO_PATH = "Logo.png"
 SRK_LOGO_PATH = "SRK_Logo.png"
 
 # --- Setup ---
 def ensure_save_dir():
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     MASTER_CSV.parent.mkdir(parents=True, exist_ok=True)
 
-def cleanup_old_folders(base_dir, days=30):
-    now = datetime.now()
-    pattern = re.compile(r"\d{2}_[A-Za-z]{3}_\d{4}")
-    for folder in base_dir.iterdir():
-        if folder.is_dir() and pattern.fullmatch(folder.name):
-            try:
-                if (now - datetime.strptime(folder.name, "%d_%b_%Y")).days > days:
-                    shutil.rmtree(folder)
-            except:
-                continue
-
 ensure_save_dir()
-cleanup_old_folders(BASE_DIR)
 
 def safe_filename(name):
     return re.sub(r'[^A-Za-z0-9_-]', '_', name)
@@ -77,27 +57,29 @@ if not st.session_state.get("authenticated", False):
     password_protection()
     st.stop()
 
+# --- Load Hazards ---
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_hazards():
+    df = pd.read_excel(EXCEL_PATH, sheet_name="Hazard information", skiprows=1)
+    return df.iloc[:, 0].dropna().tolist()
+
+# --- Load Wards ---
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_ward_gdf():
+    return gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
+
 # --- Email Sending ---
 def send_email(subject, body, to_emails, attachments):
-    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
-        st.warning("Email credentials missing in Streamlit secrets. Skipping email sending.")
-        return
-
     try:
         msg = EmailMessage()
         msg["Subject"] = subject
         msg["From"] = EMAIL_ADDRESS
         msg["To"] = ", ".join(to_emails)
         msg.set_content(body)
-
         for attachment in attachments:
             with open(attachment, "rb") as f:
                 file_data = f.read()
-                msg.add_attachment(
-                    file_data, maintype="application", subtype="octet-stream",
-                    filename=Path(attachment).name
-                )
-
+                msg.add_attachment(file_data, maintype="application", subtype="octet-stream", filename=Path(attachment).name)
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             smtp.send_message(msg)
@@ -109,84 +91,70 @@ def send_email(subject, body, to_emails, attachments):
 def append_to_master_csv(df):
     df.to_csv(MASTER_CSV, mode="a", header=not MASTER_CSV.exists(), index=False)
 
-def save_responses(responses, name, ward, email, date_filled, district_muni, local_muni):
+def save_responses(responses, name, ward, email, date_filled,
+                   district_municipality=None, local_municipality=None, extra_info=None):
     ensure_save_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_filename = f"{safe_filename(ward)}_{safe_filename(name)}_{timestamp}"
-
-    # Paths for daily folder
     csv_path = SAVE_DIR / f"{base_filename}.csv"
     pdf_path = SAVE_DIR / f"{base_filename}.pdf"
     docx_path = SAVE_DIR / f"{base_filename}.docx"
 
-    # Root copies
-    csv_root = BASE_DIR / f"{base_filename}.csv"
-    pdf_root = BASE_DIR / f"{base_filename}.pdf"
-    docx_root = BASE_DIR / f"{base_filename}.docx"
-
     df = pd.DataFrame(responses)
     df.insert(0, "Respondent Name", name)
-    df.insert(1, "Ward", ward)
-    df.insert(2, "District Municipality", district_muni)
-    df.insert(3, "Local Municipality", local_muni)
+    df.insert(1, "District Municipality", district_municipality)
+    df.insert(2, "Local Municipality", local_municipality)
+    df.insert(3, "Ward", ward)
     df.insert(4, "Email", email)
-    df.insert(5, "Date", date_filled)
-
-    # Save CSV
+    df.insert(5, "Extra Info", extra_info)
+    df.insert(6, "Date", date_filled)
     df.to_csv(csv_path, index=False)
-    df.to_csv(csv_root, index=False)
     append_to_master_csv(df)
 
-    # Save DOCX
+    # DOCX
     doc = Document()
     doc.add_heading("KZN Hazard Risk Assessment Survey", 0)
-    doc.add_paragraph(
-        f"Name: {name}\nWard: {ward}\nDistrict Municipality: {district_muni}\n"
-        f"Local Municipality: {local_muni}\nEmail: {email}\nDate: {date_filled}\n---"
-    )
+    doc.add_paragraph(f"Name: {name}")
+    doc.add_paragraph(f"District Municipality: {district_municipality}")
+    doc.add_paragraph(f"Local Municipality: {local_municipality}")
+    doc.add_paragraph(f"Ward: {ward}")
+    doc.add_paragraph(f"Email: {email}")
+    doc.add_paragraph(f"Extra Info: {extra_info}")
+    doc.add_paragraph(f"Date: {date_filled}")
+    doc.add_paragraph("---")
     for _, row in df.iterrows():
         doc.add_paragraph(f"Hazard: {row['Hazard']} | Question: {row['Question']} | Response: {row['Response']}")
     doc.save(docx_path)
-    shutil.copy(docx_path, docx_root)
 
-    # Save PDF
+    # PDF
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
     pdf.cell(200, 10, txt="KZN Hazard Risk Assessment Survey", ln=True, align="C")
     pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10,
-        txt=f"Name: {name}\nWard: {ward}\nDistrict Municipality: {district_muni}\n"
-            f"Local Municipality: {local_muni}\nEmail: {email}\nDate: {date_filled}\n---"
-    )
+    pdf.cell(200, 10, txt=f"Name: {name}", ln=True)
+    pdf.cell(200, 10, txt=f"District Municipality: {district_municipality}", ln=True)
+    pdf.cell(200, 10, txt=f"Local Municipality: {local_municipality}", ln=True)
+    pdf.cell(200, 10, txt=f"Ward: {ward}", ln=True)
+    pdf.cell(200, 10, txt=f"Email: {email}", ln=True)
+    pdf.multi_cell(0, 10, txt=f"Extra Info: {extra_info}")
+    pdf.cell(200, 10, txt=f"Date: {date_filled}", ln=True)
+    pdf.ln(5)
     for _, row in df.iterrows():
         pdf.multi_cell(0, 10, txt=f"Hazard: {row['Hazard']} | Question: {row['Question']} | Response: {row['Response']}")
     pdf.output(pdf_path)
-    shutil.copy(pdf_path, pdf_root)
 
     return csv_path, docx_path, pdf_path
 
-# --- Map Display ---
-def display_map(gdf, selected_ward=None):
-    m = folium.Map(location=[-29.5, 31.1], zoom_start=7)
-
-    def style_function(feature):
-        ward_name = feature["properties"][gdf.columns[0]]
-        if ward_name == selected_ward:
-            return {"fillColor": "blue", "color": "black", "weight": 2, "fillOpacity": 0.7}
-        return {"fillColor": "green", "color": "black", "weight": 1, "fillOpacity": 0.3}
-
-    def highlight_function(feature):
-        return {"fillColor": "yellow", "color": "black", "weight": 2, "fillOpacity": 0.5}
-
-    folium.GeoJson(
-        data=gdf.__geo_interface__,
-        style_function=style_function,
-        highlight_function=highlight_function,
-        tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[0]], aliases=["Ward:"])
-    ).add_to(m)
-
-    return st_folium(m, height=500)
+# --- Create ZIP ---
+def create_zip(local_municipality, files):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_name = f"{safe_filename(local_municipality)}_{timestamp}.zip"
+    zip_path = SAVE_DIR / zip_name
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        for file in files:
+            zipf.write(file, os.path.basename(file))
+    return zip_path
 
 # --- Hazard Questions ---
 questions_with_descriptions = {
@@ -273,11 +241,14 @@ questions_with_descriptions = {
 capacity_questions = [
     "Sufficient staff/human resources",
     "Experience and special knowledge",
-    "Equipment",
-    "Funding",
-    "Facilities",
+    "Equipment availability",
+    "Adequate funding/budget allocation",
+    "Facilities and infrastructure for response",
     "Prevention and mitigation plans",
     "Response and recovery plans",
+    "Community awareness and training programs",
+    "Early warning systems in place",
+    "Coordination with local authorities and partners",
 ]
 
 capacity_options = [
@@ -288,44 +259,43 @@ capacity_options = [
     "Strongly Agree",
 ]
 
-# --- Hazard Question Rendering ---
 def build_hazard_questions(hazards_to_ask):
     responses = []
     for hazard in hazards_to_ask:
         st.markdown(f"### {hazard}")
         for q, opts in questions_with_descriptions.items():
-            response = st.radio(q, opts, key=f"{hazard}_{q}", index=0)
+            response = st.radio(q, opts, key=f"{hazard}_{q}")
             responses.append({"Hazard": hazard, "Question": q, "Response": response})
-
         for cq in capacity_questions:
-            response = st.radio(cq, capacity_options, key=f"{hazard}_{cq}", index=0)
+            response = st.radio(cq, capacity_options, key=f"{hazard}_{cq}")
             responses.append({"Hazard": hazard, "Question": cq, "Response": response})
-        st.markdown("<hr>", unsafe_allow_html=True)
     return responses
 
-# --- Load Data ---
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_hazards():
-    df = pd.read_excel(EXCEL_PATH, sheet_name="Hazard information", skiprows=1)
-    return df.iloc[:, 0].dropna().tolist()
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_ward_gdf():
-    return gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
+# --- Map Display with Hover Highlight ---
+def display_map(gdf):
+    m = folium.Map(location=[-29.5, 31.1], zoom_start=7)
+    folium.GeoJson(
+        data=gdf.__geo_interface__,
+        style_function=lambda x: {"fillColor": "#3186cc", "color": "black", "weight": 1, "fillOpacity": 0.4},
+        highlight_function=lambda x: {"fillColor": "#ffcc00", "color": "black", "weight": 2, "fillOpacity": 0.7},
+        tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[0]], aliases=["Ward:"], sticky=True)
+    ).add_to(m)
+    return st_folium(m, height=1000, width=1200)
 
 # --- Survey ---
 def run_survey():
     st.title("KZN Hazard Risk Assessment Survey")
     hazards = load_hazards()
     gdf = load_ward_gdf()
-    selected_ward = st.session_state.get("selected_ward", None)
-    map_data = display_map(gdf, selected_ward=selected_ward)
+    map_data = display_map(gdf)
 
+    clicked_ward = None
     if map_data.get("last_clicked"):
         pt = Point(map_data["last_clicked"]["lng"], map_data["last_clicked"]["lat"])
         for _, row in gdf.iterrows():
             if row.geometry.contains(pt):
-                st.session_state["selected_ward"] = row[gdf.columns[0]]
+                clicked_ward = row[gdf.columns[0]]
+                st.session_state["selected_ward"] = clicked_ward
                 break
 
     ward_display = st.session_state.get("selected_ward", "")
@@ -337,70 +307,117 @@ def run_survey():
     custom = st.text_input("Other hazard") if st.checkbox("Add custom hazard") else ""
 
     if selected or custom:
-        if st.button("Proceed"):
-            st.session_state["show_form"] = True
-            st.rerun()
+        if "active_tab" not in st.session_state:
+            st.session_state.active_tab = "Respondent Info"
 
-    if st.session_state.get("show_form"):
-        tab1, tab2 = st.tabs(["Respondent Info", "Hazard Risk Evaluation"])
-        with tab1:
-            with st.form("respondent_form"):
-                name = st.text_input("Full Name")
-                user_email = st.text_input("Your Email")
-                district_muni = st.text_input("District Municipality")
-                local_muni = st.text_input("Local Municipality")
-                final_ward = ward_display or st.text_input("Ward (if not using map)")
-                today = st.date_input("Date", value=date.today())
-                proceed = st.form_submit_button("Save & Proceed to Hazard Evaluation")
-                if proceed:
-                    if not name or not final_ward:
-                        st.error("Please fill in your name and ward.")
-                    else:
-                        st.session_state["respondent_info"] = {
-                            "name": name,
-                            "email": user_email,
-                            "district": district_muni,
-                            "local": local_muni,
-                            "ward": final_ward,
-                            "date": today
-                        }
-                        st.rerun()
+        if st.session_state.active_tab == "Respondent Info":
+            st.subheader("Respondent Info")
+            st.session_state["name"] = st.text_input("Full Name", st.session_state.get("name", ""))
+            st.session_state["district_municipality"] = st.text_input("District Municipality", st.session_state.get("district_municipality", ""))
+            st.session_state["local_municipality"] = st.text_input("Local Municipality", st.session_state.get("local_municipality", ""))
+            st.session_state["final_ward"] = ward_display or st.text_input("Ward (if not using map)", st.session_state.get("final_ward", ""))
+            st.session_state["today"] = st.date_input("Date", value=st.session_state.get("today", date.today()))
+            st.session_state["user_email"] = st.text_input("Your Email", st.session_state.get("user_email", ""))
+            st.session_state["extra_info"] = st.text_area("Any extra information to be added", st.session_state.get("extra_info", ""))
 
-        with tab2:
-            if st.button("← Back to Respondent Info"):
+            if st.button("Click Hazard Risk Evaluation Tab"):
+                st.session_state.active_tab = "Hazard Risk Evaluation"
                 st.rerun()
 
+        elif st.session_state.active_tab == "Hazard Risk Evaluation":
+            st.subheader("Hazard Risk Evaluation")
+            hazards_to_ask = selected + ([custom] if custom else [])
             with st.form("hazard_form"):
-                hazards_to_ask = selected + ([custom] if custom else [])
                 responses = build_hazard_questions(hazards_to_ask)
-                accept = st.checkbox("I accept all information is true and correct")
-                submit = st.form_submit_button("Submit Survey")
+                col1, col2 = st.columns(2)
+                with col1:
+                    back = st.form_submit_button("Go Back to Respondent Info Tab")
+                with col2:
+                    submit = st.form_submit_button("Submit Survey")
+                if back:
+                    st.session_state.active_tab = "Respondent Info"
+                    st.rerun()
                 if submit:
-                    info = st.session_state.get("respondent_info", {})
-                    if not info:
-                        st.error("Please complete Respondent Info first.")
-                    elif not accept:
-                        st.error("You must accept that all information is true and correct.")
+                    if not st.session_state.get("name") or not st.session_state.get("final_ward"):
+                        st.error("Please fill in your name and ward.")
                     else:
                         csv_file, doc_file, pdf_file = save_responses(
-                            responses, info["name"], info["ward"], info["email"],
-                            info["date"], info["district"], info["local"]
+                            responses,
+                            st.session_state["name"],
+                            st.session_state["final_ward"],
+                            st.session_state["user_email"],
+                            st.session_state["today"],
+                            st.session_state["district_municipality"],
+                            st.session_state["local_municipality"],
+                            st.session_state["extra_info"]
                         )
-                        st.success("Survey submitted successfully!")
-                        if info["email"]:
-                            send_email("Your KZN Hazard Survey Submission",
-                                       "Thank you for completing the survey.",
-                                       [info["email"]], [csv_file, doc_file, pdf_file])
-                        send_email("New KZN Hazard Survey Submission",
-                                   "A new survey has been submitted.",
-                                   ADMIN_EMAILS, [csv_file, doc_file, pdf_file])
+                        zip_file = create_zip(st.session_state["local_municipality"], [csv_file, doc_file, pdf_file])
+                        st.session_state["files_saved"] = (csv_file, doc_file, pdf_file, zip_file)
+                        st.success(f"Survey submitted successfully! Files saved in: {SAVE_DIR}")
+
+                        # Send ZIP via Email
+                        if st.session_state["user_email"]:
+                            send_email(
+                                "Your KZN Hazard Survey Submission",
+                                "Thank you for completing the survey. Your files are attached as a ZIP archive.",
+                                [st.session_state["user_email"]],
+                                [zip_file]
+                            )
+                        send_email(
+                            "New KZN Hazard Survey Submission",
+                            "A new survey has been submitted. See attached ZIP file.",
+                            ADMIN_EMAILS,
+                            [zip_file]
+                        )
+
+        # Show download buttons outside the form
+        if "files_saved" in st.session_state:
+            csv_file, doc_file, pdf_file, zip_file = st.session_state["files_saved"]
+            with open(csv_file, "rb") as f:
+                st.download_button("Download CSV", f, file_name=os.path.basename(csv_file), mime="text/csv")
+            with open(doc_file, "rb") as f:
+                st.download_button("Download DOCX", f, file_name=os.path.basename(doc_file),
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            with open(pdf_file, "rb") as f:
+                st.download_button("Download PDF", f, file_name=os.path.basename(pdf_file), mime="application/pdf")
+            with open(zip_file, "rb") as zf:
+                st.download_button("Download All (ZIP)", zf, file_name=os.path.basename(zip_file), mime="application/zip")
 
 # --- Main App ---
 st.set_page_config(page_title="KZN Hazard Risk Assessment", layout="wide")
-menu = st.sidebar.radio("Navigation", ["Survey"])
+st.markdown("<style>div.block-container{padding-top: 1rem;}</style>", unsafe_allow_html=True)
+
+menu = st.sidebar.radio("Navigation", ["Survey", "Admin Dashboard"])
 
 if os.path.exists(LOGO_PATH): st.sidebar.image(LOGO_PATH, width=180)
 if os.path.exists(SRK_LOGO_PATH): st.sidebar.image(SRK_LOGO_PATH, width=160)
 
+# Disclaimer
+st.sidebar.markdown(
+    "<small><i>Disclaimer: The software is developed by Dingaan Mahlangu and should not be used without prior permission.</i></small>",
+    unsafe_allow_html=True
+)
+
 if menu == "Survey":
     run_survey()
+elif menu == "Admin Dashboard":
+    st.title("Admin Dashboard - KZN Hazard Survey")
+    if "admin_authenticated" not in st.session_state:
+        st.session_state["admin_authenticated"] = False
+    if not st.session_state["admin_authenticated"]:
+        admin_password = st.text_input("Enter Admin Password:", type="password")
+        if st.button("Login as Admin"):
+            if admin_password == ADMIN_PASSWORD:
+                st.session_state["admin_authenticated"] = True
+                st.success("Admin Access Granted.")
+                st.rerun()
+            else:
+                st.error("Incorrect Admin Password.")
+        st.stop()
+    if MASTER_CSV.exists():
+        df = pd.read_csv(MASTER_CSV)
+        st.dataframe(df)
+        st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"),
+                           file_name="filtered_submissions.csv", mime="text/csv")
+    else:
+        st.warning("No submissions found.")
